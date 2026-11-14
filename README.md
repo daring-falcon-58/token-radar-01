@@ -50,6 +50,50 @@ implied        = max(1, round(base × growthMult × maturityMult))
 Each protocol also gets a **farm plan**: six steps derived from its own record (category, chains,
 TVL, age), each with a cost and a time — what to do, what it costs, how long to hold. No slogans.
 
+## How to read the ranking
+
+Start at the top and work down, but do not treat the order as a countdown. The board answers one
+question: if this protocol launched a token tomorrow, what would the market plausibly pay for it,
+given what it pays for live protocols in the same line of work. A rank near the top means three
+things line up at once: the protocol holds a lot of value, its sector trades richly against that
+value, and it has run for a long time without issuing a token. Any one of those alone is not
+enough, and the board will not rank a small protocol first just because its sector is hot, nor an
+old one first just because it has waited longest.
+
+The most useful way to use it is as a shortlist. Take the top dozen, open each protocol's own
+site, and check three things the snapshot cannot tell you: that it still has no token, that it
+runs a points or rewards program you can actually join, and that the position its farm plan asks
+for is one you understand and can unwind. If any of those fails, move on to the next row. The
+early rows below the watchlist floor are the same exercise with smaller numbers: they are where a
+launch can surprise, and where the cost of being wrong is lowest, because the positions are
+smaller.
+
+The sector table ("Where the watchlist concentrates") is the other half of the read. When one
+sector holds most of the forty and most of the combined value, the next launches are likely to
+come from that sector, and a single protocol's rank matters less than the sector's weight. When
+the value is spread evenly, the ranking itself carries more of the signal.
+
+## Limitations
+
+- **A launch is not promised.** Implied value is a valuation, not a forecast. A protocol can
+  rank first for a year and never issue a token, and nothing in the snapshot says it will.
+- **The snapshot is one day.** TVL, growth and the live comparables are all read from a single
+  sealed date. A protocol that grew fast the week before, or one whose sector re-rated after the
+  snapshot, will be scored on stale figures.
+- **TVL is not revenue.** A protocol can hold a lot of value while earning little, and the market
+  pays for earnings and growth, not for deposits alone. The category multiple captures some of
+  that — sectors that earn more trade richer — but it is a sector average, not a read of any one
+  protocol's books.
+- **Thin sectors are noisy.** A category with one live protocol sets its multiple from that one
+  name, shrunk toward the global median. The shrinkage keeps a single outlier from deciding the
+  sector, but a thin sector's multiple is still the least reliable number on the board. The
+  comparables table shows the comp count next to every multiple so you can see which ones to
+  trust least.
+- **The farm plans are generic by design.** They are derived from the protocol's category,
+  chains, size and age, not from reading its docs. They tell you the shape of a position and
+  what it costs, not the exact pool, vault or market to use. Always confirm the details on the
+  protocol's own pages before depositing.
+
 ## The dashboard
 
 `dashboard/` is a static page that renders with no network: `index.html`, `app.css`, `app.js`, plus

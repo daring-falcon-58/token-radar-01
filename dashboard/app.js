@@ -231,6 +231,48 @@
     );
   }
 
+  // The watchlist, grouped by sector: how many of the forty sit in each category and what their
+  // launches would be worth together. A sector holding many watchlist rows and a large combined
+  // value is where the next launches concentrate, and where a single launch matters least alone.
+  function categorySummary() {
+    var byCat = {};
+    DATA.rows.forEach(function (r) {
+      var c = r.category || 'Other';
+      var entry = byCat[c] || (byCat[c] = { category: c, watchlist: 0, early: 0, value: 0 });
+      if (isWatchlist(r.slug)) entry.watchlist += 1;
+      else entry.early += 1;
+      entry.value += r.implied_value_usd;
+    });
+    var list = Object.keys(byCat).map(function (k) { return byCat[k]; })
+      .sort(function (a, b) { return b.value - a.value || (a.category < b.category ? -1 : 1); })
+      .slice(0, 8);
+    if (list.length === 0) return null;
+    var tbody = el('tbody');
+    list.forEach(function (e) {
+      tbody.appendChild(el('tr', null,
+        el('td', null, el('b', { text: e.category })),
+        el('td', { class: 'num', text: String(e.watchlist) }),
+        el('td', { class: 'num', text: String(e.early) }),
+        el('td', { class: 'num', text: fmtUsd(e.value) })
+      ));
+    });
+    return el('section', { class: 'panel chart-panel' },
+      el('h2', { text: 'Where the watchlist concentrates' }),
+      el('p', { class: 'sub', text: 'The eight sectors with the largest combined implied value. Watchlist is the forty; early is the rest of the board.' }),
+      el('div', { class: 'table-wrap compact' },
+        el('table', null,
+          el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Sector' }),
+            el('th', { scope: 'col', text: 'Watchlist' }),
+            el('th', { scope: 'col', text: 'Early' }),
+            el('th', { scope: 'col', text: 'Combined implied value' })
+          )),
+          tbody
+        )
+      )
+    );
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.reduce(function (acc, r) { return acc.concat(r.chains || []); }, []))).sort();
@@ -388,7 +430,9 @@
         'implied = round( tvl_usd x category_multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
       ),
       el('p', { class: 'sub', text: 'The category multiple is the market\u2019s own valuation of the sector: the median market-cap-to-TVL ratio of the live protocols in that category, shrunk toward the global median of ' + fmtMult(DATA.global_median) + ' with ' + m.prior_strength + ' phantom protocols so a thin category cannot swing on one outlier, then clamped to ' + fmtMult(m.multiple_floor) + '–' + fmtMult(m.multiple_cap) + '. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
-      comparablesTable()
+      comparablesTable(),
+      el('h3', { text: 'Reading the board' }),
+      el('p', { class: 'sub', text: 'Treat the ranking as a watchlist, not a price target. A high implied value means the protocol is large, in a sector the market values richly, and has run a long time with no token: the three things that have to be true before a launch is worth farming. It does not mean a token is coming, and it does not say when. A protocol can sit high for months and never launch, and a small early row can launch first. What the board is good for is narrowing two hundred names to the dozen worth checking each week, and giving each of those a concrete farm plan with a cost and a hold time. Before farming any row, open the protocol itself and confirm it still has no token, that its points or rewards page is live, and that the position the plan asks for is one you understand. Never pay to claim, never bridge more than the plan states, and never farm from a wallet that holds funds you cannot lose.' })
     );
   }
 
@@ -446,7 +490,10 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(lede());
-    if (state.tab === 'pre-token') shell.appendChild(topChart());
+    if (state.tab === 'pre-token') {
+      shell.appendChild(topChart());
+      shell.appendChild(categorySummary());
+    }
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
