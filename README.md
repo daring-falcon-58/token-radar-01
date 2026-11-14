@@ -133,6 +133,36 @@ dashboard/               The static page: index.html, app.css, app.js
 screenshots/             The three screenshots: board, detail, filtered
 ```
 
+## Running on a new snapshot
+
+The snapshot is a single day, and the board goes stale with it. To rebuild the radar from a
+fresh DefiLlama pull, replace `input/snapshot.json` with the new file — same shape, same ten
+fields per protocol, a new `as_of` date — and run `main.ts` again. Nothing else needs editing:
+the category multiples, the growth and maturity multipliers, the watchlist coverage and the farm
+plans are all recomputed from the new file on every run, so a protocol that launched a token
+since the last snapshot drops out of the pre-token board and into the live set, a sector that
+re-rated gets a new multiple, and a protocol that crossed the $50M floor moves from the early
+radar onto the watchlist. Take new screenshots after a rebuild, because the dashboard's chart,
+the sector table and the detail views all change with the data, and the dossier is rebuilt from
+the output directory each time. If the new snapshot renames a category or adds a chain the
+dashboard has never seen, the filters pick it up on their own — they are built from the rows,
+not from a fixed list — but read the top of the new board once by eye, since a renamed category
+can split one sector into two and halve both multiples.
+
+## Verifying the output
+
+Three checks, in order, before trusting a fresh build. First, read the line `main.ts` prints:
+it names the protocol count, the watchlist size, the row count and the early/live split, and any
+of those moving by more than a handful from the previous build means the input changed shape.
+Second, open `out/board.json` and confirm the ranks run 1 to N with no gaps, the implied values
+never rise as the rank falls, and every watchlist slug from the snapshot is present — `main.ts`
+refuses to write a board that fails any of those, so a build that finishes has already passed
+them, but the file is the record to keep. Third, open the dashboard, pick the top row, and read
+its detail view: the page recomputes that row from the snapshot figures and says whether it
+matches the number `board.json` carries, and the two must agree to the dollar. If they differ,
+the data file the page loaded is not the board the program wrote — rebuild, and do not hand in a
+mismatched pair.
+
 ## License
 
 MIT. See `LICENSE`.
