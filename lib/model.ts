@@ -1,4 +1,4 @@
-// The token radar's model (radar-2): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
@@ -15,13 +15,21 @@
 // recomputed from the snapshot on every run.
 //
 //   comp(category) = (n x median(mcap/tvl of live in category) + K x globalMedian) / (n + K), clamped
-//   base           = tvl_usd x comp(category)
+//   sizeFactor     = clamp((tvl_usd / sector median TVL) ^ gamma, 0.5, 2), gamma fitted from the live comps
+//   multiple       = clamp(comp(category) x sizeFactor, 0.05, 1.5)
+//   base           = tvl_usd x multiple
 //   growth         = clamp(change_7d, -60, 120) per cent
 //   growthMult     = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity       = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   implied        = max(1, round(base x growthMult x maturity))
 //
 // The constants are stated in the dashboard and changeable in the model sandbox.
+// The size curve lives in lib/curve.ts, the farm economics in lib/farm.ts.
+
+import { curveMultiple, fitSizeCurve, looBacktest, scatterSample, sectorCurves } from './curve.ts';
+import type { CurveBacktest, CurvePoint, LiveComp, SectorCurve, SizeCurve } from './curve.ts';
+import { farmEconomics, verdictCounts } from './farm.ts';
+import type { FarmEconomics } from './farm.ts';
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -76,7 +84,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -122,12 +130,16 @@ export interface BoardRow {
     category_multiple: number;
     category_comps: number;
     category_median: number | null;
+    size_factor: number;
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
+  farm_cost_usd: number;
+  farm_capacity: number;
+  farm_verdict: FarmEconomics['verdict'];
 }
 
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
@@ -145,8 +157,12 @@ export interface RadarRow {
   implied_value_usd: number;
   category_multiple: number;
   category_comps: number;
+  size_factor: number;
   growth_multiplier: number;
   maturity_multiplier: number;
+  farm_cost_usd: number;
+  farm_capacity: number;
+  farm_verdict: FarmEconomics['verdict'];
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -175,6 +191,14 @@ export interface RadarData {
   global_median: number;
   /** One entry per category that appears on the board, highest multiple first. */
   category_multiples: CategoryMultiple[];
+  /** The fitted size curve: exponent, intercept, and how many comps entered it. */
+  curve: SizeCurve;
+  /** The blind test: leave-one-out error of the flat median against the curve. */
+  backtest: CurveBacktest;
+  /** Live comps for the dashboard's curve chart: raw TVL and market cap. */
+  scatter: CurvePoint[];
+  /** How many board rows carry each farm verdict. */
+  verdicts: { Strong: number; 'Worth it': number; Marginal: number; Thin: number };
   /** The watchlist's slugs, so the dashboard can mark a row as one of the forty. */
   watchlist: string[];
   rows: RadarRow[];
@@ -223,9 +247,18 @@ export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool,
+ *  and not a wrapped, staked or bridged product of a token that already trades. A bridge, a liquid
+ *  staking or restaking product, or a name carrying wrapped, staked or staking, is another token in
+ *  a wrapper, not a protocol still waiting on a launch of its own: the same rule the watchlist was
+ *  built with, applied to the early rows too, so the board is clean. */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  if (!isPreToken(p) || p.category === 'CEX' || VERSIONED.test(p.name)) return false;
+  if (p.category === 'Bridge' || p.category === 'Canonical Bridge' || p.category === 'Liquid Staking' || p.category === 'Liquid Restaking' || p.category === 'Restaked BTC') return false;
+  const words = p.name.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 0);
+  if (words.includes('wrapped') || words.includes('staked') || words.includes('staking')) return false;
+  if (/^(binance|coinbase|bybit|kraken|bitget|okx|bitfinex|gemini)\b/i.test(p.name)) return false;
+  return true;
 }
 
 /**
@@ -274,23 +307,25 @@ export function categoryMultiples(
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
-  multiples: Map<string, CategoryMultiple>,
+  sectors: Map<string, SectorCurve>,
+  curve: SizeCurve,
   model: ModelConstants = MODEL,
 ): {
   implied: number;
   categoryMultiple: number;
   categoryComps: number;
   categoryMedian: number | null;
+  sizeFactor: number;
   growthPct: number;
   growthMult: number;
   maturityMult: number;
   age: number | null;
 } {
   const age = ageDays(asOf, protocol.listed_at);
-  const cat = multiples.get(protocol.category ?? 'Other') ?? multiples.get('Other')!;
+  const sector = sectors.get(protocol.category ?? 'Other') ?? sectors.get('Other')!;
   // The multiple the model scores with is the rounded multiple the board carries, so the dashboard's
   // recompute from the same figures lands on the same number, to the dollar.
-  const multiple = round4(cat.multiple);
+  const { multiple, size_factor } = curveMultiple(protocol.tvl_usd, protocol.category, sectors, curve, model.multiple_floor, model.multiple_cap);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
@@ -301,8 +336,9 @@ export function impliedValue(
   return {
     implied,
     categoryMultiple: multiple,
-    categoryComps: cat.comps,
-    categoryMedian: cat.median,
+    categoryComps: sector.comps,
+    categoryMedian: sector.median,
+    sizeFactor: size_factor,
     growthPct,
     growthMult,
     maturityMult,
@@ -323,9 +359,19 @@ export interface BoardSummary {
   live_size: number;
 }
 
+/** Every live protocol the curve may learn from: it trades, it is not an
+ *  exchange, and its market cap and TVL are both positive. */
+export function liveComps(snapshot: Snapshot): LiveComp[] {
+  return snapshot.protocols
+    .filter((p) => !isPreToken(p) && p.category !== 'CEX' && p.tvl_usd > 0 && p.mcap_usd !== null && p.mcap_usd > 0)
+    .map((p) => ({ slug: p.slug, category: p.category, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd! }));
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
-  const { byCategory } = categoryMultiples(snapshot, model);
+  const live = liveComps(snapshot);
+  const curve = fitSizeCurve(live);
+  const sectors = sectorCurves(live, curve, model.prior_strength);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
@@ -343,36 +389,43 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   for (const p of early) chosen.set(p.slug, p);
 
   const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, byCategory, model);
+    const v = impliedValue(p, snapshot.as_of, sectors, curve, model);
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
-    rank: i + 1,
-    slug: s.p.slug,
-    name: s.p.name,
-    category: s.p.category,
-    chains: s.p.chains,
-    tvl_usd: s.p.tvl_usd,
-    change_7d: s.p.change_7d,
-    mcap_usd: s.p.mcap_usd,
-    listed_at: s.p.listed_at,
-    gecko_id: s.p.gecko_id,
-    symbol: s.p.symbol,
-    token_status: 'pre-token',
-    age_days: s.age,
-    implied_value_usd: s.implied,
-    model: {
-      category_multiple: round4(s.categoryMultiple),
-      category_comps: s.categoryComps,
-      category_median: s.categoryMedian === null ? null : round4(s.categoryMedian),
-      growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
+  return scored.map((s, i) => {
+    const econ = farmEconomics(s.p.chains, s.p.tvl_usd, s.age, s.implied);
+    return {
+      rank: i + 1,
+      slug: s.p.slug,
+      name: s.p.name,
+      category: s.p.category,
+      chains: s.p.chains,
+      tvl_usd: s.p.tvl_usd,
+      change_7d: s.p.change_7d,
+      mcap_usd: s.p.mcap_usd,
+      listed_at: s.p.listed_at,
+      gecko_id: s.p.gecko_id,
+      symbol: s.p.symbol,
+      token_status: 'pre-token',
       age_days: s.age,
-    },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
-  }));
+      implied_value_usd: s.implied,
+      model: {
+        category_multiple: round4(s.categoryMultiple),
+        category_comps: s.categoryComps,
+        category_median: s.categoryMedian === null ? null : round4(s.categoryMedian),
+        size_factor: round4(s.sizeFactor),
+        growth_pct: s.growthPct,
+        growth_multiplier: round4(s.growthMult),
+        maturity_multiplier: round4(s.maturityMult),
+        age_days: s.age,
+      },
+      farm_steps: farmSteps(s.p, s.age).map(stepText),
+      farm_cost_usd: econ.cost_usd,
+      farm_capacity: econ.capacity,
+      farm_verdict: econ.verdict,
+    };
+  });
 }
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
@@ -503,8 +556,12 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     category_multiple: row.model.category_multiple,
     category_comps: row.model.category_comps,
+    size_factor: row.model.size_factor,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
+    farm_cost_usd: row.farm_cost_usd,
+    farm_capacity: row.farm_capacity,
+    farm_verdict: row.farm_verdict,
   };
 }
 
@@ -518,6 +575,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const category_multiples = [...byCategory.values()]
     .filter((c) => catsOnBoard.has(c.category))
     .sort((a, b) => b.multiple - a.multiple || (a.category < b.category ? -1 : 1));
+  const comps = liveComps(snapshot);
+  const curve = fitSizeCurve(comps);
+  const backtest = looBacktest(comps, model.prior_strength);
+  const scatter = scatterSample(comps, 60);
+  const verdicts = verdictCounts(board.map((r) => r.farm_verdict));
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -530,6 +592,10 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     global_median: round4(globalMedian),
     category_multiples,
+    curve,
+    backtest,
+    scatter,
+    verdicts,
     watchlist: [...snapshot.watchlist],
     rows: board.map(radarRow),
     live,

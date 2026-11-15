@@ -19,16 +19,20 @@ The snapshot covers 758 protocols. The radar:
 4. **Sets the live-token protocols aside** — the 24 largest by market cap, shown with the market's
    own values, never mixed into the pre-token ranking.
 
-## The model (radar-2)
+## The model (radar-3)
 
-Implied value is one function of the snapshot figures. The base multiple is not a flat number: it
-is the market's own valuation of the protocol's sector, read off the live protocols in the same
-category.
+Implied value is one function of the snapshot figures. The base multiple is not a flat number:
+it is the market's own valuation of the protocol's sector, read off the live protocols in the same
+category, moved by the size curve: the market pays less per dollar of TVL as protocols grow, so a
+protocol is priced against comps of its own scale.
 
 ```
 comp(category) = (n × median(mcap/TVL of live protocols in the category)
                   + 5 × globalMedian) / (n + 5), clamped to [0.05×, 1.5×]
-base           = tvl_usd × comp(category)
+sizeFactor     = clamp((tvl_usd / sector median TVL) ^ gamma, 0.5, 2)
+                 gamma fitted from the live comps (leave-one-out tested, see below)
+multiple       = clamp(comp(category) × sizeFactor, 0.05×, 1.5×)
+base           = tvl_usd × multiple
 growthMult     = 1 + clamp(change_7d, -60, 120) / 100 × 0.5
 maturityMult   = 0.6 + min(age_days, 1095) / 1095 × 0.4   (age unknown: 365 days)
 implied        = max(1, round(base × growthMult × maturityMult))
@@ -40,6 +44,15 @@ implied        = max(1, round(base × growthMult × maturityMult))
   with no live comps takes the global median. The dashboard's comparables table lists every
   category's multiple, its live comp count, and its raw median, so the sector pricing is checkable
   at a glance.
+- **Size curve.** The ratio falls with size: across the snapshot's live comps, log10(mcap/TVL)
+  against log10(TVL) has a negative slope (gamma ≈ −0.46 on this snapshot), fitted by least
+  squares. A protocol's multiple is its sector's base moved by (TVL / sector median TVL)^gamma,
+  clamped to 0.5×–2×, so the size effect can at most halve or double the sector's own pricing.
+  The dashboard charts the fitted curve against the live comps.
+- **Blind test.** The curve is tested leave-one-out over the live comps: each live protocol is
+  predicted from all the others, once with the flat sector median and once with the curve. On this
+  snapshot (117 live comps) the curve's median error is 4.31× against the flat median's 5.07×,
+  and 29.9% of its predictions land within 2× against 20.5%. The dashboard shows both numbers.
 - **Growth.** Seven-day TVL change, clamped to −60%…+120%, worth half its weight.
 - **Maturity.** Longer with no token means a longer track record and a more mature launch; worth
   0.6×–1.0×.
@@ -47,8 +60,17 @@ implied        = max(1, round(base × growthMult × maturityMult))
   recomputed from the snapshot on every run. The dashboard recomputes each row from the snapshot
   figures and shows whether it matches the number `board.json` carries.
 
+The board is clean: the watchlist is the floor, and the early rows are pre-token protocols below
+it that are not a wrapped, staked or bridged product of a token that already trades (no Bridge,
+Canonical Bridge, Liquid Staking, Liquid Restaking, Restaked BTC or CEX category, no versioned
+name, no wrapped/staked/staking in the name, no exchange prefix). On this snapshot that leaves
+178 rows: 40 watchlist + 138 early.
+
 Each protocol also gets a **farm plan**: six steps derived from its own record (category, chains,
 TVL, age), each with a cost and a time — what to do, what it costs, how long to hold. No slogans.
+Each row also carries **farm economics**: the total gas the plan costs on its chain, how many
+farmers the launch supports at $100 of profit each (assuming 5% of the launch value reaches
+farmers), and a verdict — Strong, Worth it, Marginal or Thin — from those two numbers.
 
 ## How to read the ranking
 

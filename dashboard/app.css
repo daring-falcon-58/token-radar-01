@@ -162,3 +162,33 @@ tbody tr[data-selected="true"] { background: rgba(45, 212, 191, 0.08); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* radar-3: the blind-test strip under the lede, the size-curve chart, and the
+   farm-verdict badges. Colours follow the page: teal for the fit and for
+   Strong, gold for Marginal, blue for Worth it, grey for Thin. */
+.backtest-strip {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border: 1px solid #1f6f5c;
+  border-radius: 8px;
+  background: #0f2a24;
+  color: #c9f5e8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.scatter-dot { fill: #7dd3c8; opacity: 0.75; }
+.fit-line { stroke: #2dd4bf; stroke-width: 2; fill: none; }
+.grid { stroke: #22303f; stroke-width: 1; }
+.axis { fill: #8b98a9; font-size: 11px; }
+.verdict {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.verdict.strong { background: #0f2a24; color: #2dd4bf; border: 1px solid #1f6f5c; }
+.verdict.worth { background: #12233d; color: #7aa8f0; border: 1px solid #2b4a7a; }
+.verdict.marginal { background: #2e230a; color: #e0b34c; border: 1px solid #6b5316; }
+.verdict.thin { background: #23272e; color: #9aa3af; border: 1px solid #3a4048; }
