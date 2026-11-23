@@ -204,11 +204,13 @@ export function curveMultiple(
   curve: SizeCurve,
   multipleFloor: number,
   multipleCap: number,
+  clampLo: number = SIZE_FACTOR_FLOOR,
+  clampHi: number = SIZE_FACTOR_CAP,
 ): { multiple: number; size_factor: number } {
   const sector = sectors.get(category ?? 'Other') ?? sectors.get('Other')!;
   const ref = sector.ref_tvl > 0 ? sector.ref_tvl : curve.median_tvl;
   const raw = ref > 0 && tvlUsd > 0 ? Math.pow(tvlUsd / ref, curve.gamma) : 1;
-  const sizeFactor = Math.min(SIZE_FACTOR_CAP, Math.max(SIZE_FACTOR_FLOOR, raw));
+  const sizeFactor = Math.min(clampHi, Math.max(clampLo, raw));
   const multiple = Math.min(multipleCap, Math.max(multipleFloor, sector.multiple * sizeFactor));
   return { multiple: Math.round(multiple * 1e4) / 1e4, size_factor: Math.round(sizeFactor * 1e4) / 1e4 };
 }

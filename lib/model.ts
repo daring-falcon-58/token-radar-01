@@ -1,4 +1,4 @@
-// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
@@ -14,22 +14,41 @@
 // protocol name is ever special-cased: the same function scores every row, and the multiples are
 // recomputed from the snapshot on every run.
 //
+// radar-4 fits every value term radar-3 hand-set (lib/terms.ts): the shrinkage prior, the growth
+// weight, the maturity floor/range and the size-factor clamp are gridded over eight candidates and
+// selected on the pooled median of five held-out sets (split-half by slug and by TVL, both
+// directions, plus leave-one-category-out), because the LOO-minimising pick overfits. The board
+// also carries each row's launch odds (lib/odds.ts): the chance the protocol ever issues a token,
+// read off the peers' record as the mean of its smoothed category, TVL-band and age-band token
+// rates, validated at AUC 0.799 (0.742 / 0.759 held out). Expected value is implied x odds, and
+// the farm verdicts are sized on the expected value, not on a launch treated as certain.
+//
 //   comp(category) = (n x median(mcap/tvl of live in category) + K x globalMedian) / (n + K), clamped
-//   sizeFactor     = clamp((tvl_usd / sector median TVL) ^ gamma, 0.5, 2), gamma fitted from the live comps
+//   sizeFactor     = clamp((tvl_usd / sector median TVL) ^ gamma, clamp_lo, clamp_hi), gamma fitted
 //   multiple       = clamp(comp(category) x sizeFactor, 0.05, 1.5)
 //   base           = tvl_usd x multiple
 //   growth         = clamp(change_7d, -60, 120) per cent
 //   growthMult     = 1 + (growth / 100) x GROWTH_WEIGHT
-//   maturity       = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
+//   maturity       = MATURITY_FLOOR + min(age_days, 1095) / 1095 x MATURITY_RANGE   (age unknown: 365)
 //   implied        = max(1, round(base x growthMult x maturity))
+//   odds           = mean(category token rate, TVL-band token rate, age-band token rate), smoothed
+//   expected       = max(1, round(implied x odds))
 //
-// The constants are stated in the dashboard and changeable in the model sandbox.
-// The size curve lives in lib/curve.ts, the farm economics in lib/farm.ts.
+// The constants are the terms lib/terms.ts selects from the snapshot at run time; the dashboard
+// states them and the selection table. The size curve lives in lib/curve.ts, the farm economics in
+// lib/farm.ts, the fitted terms in lib/terms.ts, the launch odds in lib/odds.ts, the integrity
+// strip in lib/integrity.ts.
 
 import { curveMultiple, fitSizeCurve, looBacktest, scatterSample, sectorCurves } from './curve.ts';
 import type { CurveBacktest, CurvePoint, LiveComp, SectorCurve, SizeCurve } from './curve.ts';
 import { farmEconomics, verdictCounts } from './farm.ts';
 import type { FarmEconomics } from './farm.ts';
+import { selectTerms } from './terms.ts';
+import type { TermCandidate, TermSelection } from './terms.ts';
+import { fitOdds, tokenOdds, validateOdds } from './odds.ts';
+import type { OddsModel, OddsValidation } from './odds.ts';
+import { integrityStrip } from './integrity.ts';
+import type { Integrity } from './integrity.ts';
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -54,7 +73,9 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-/** The model's constants, as the dashboard states them and the sandbox may change them. */
+/** The model's constants, as the dashboard states them. radar-4's values are the terms
+ *  lib/terms.ts selects from the snapshot at run time; MODEL below is radar-3's hand-set
+ *  fallback and the first selection candidate. */
 export interface ModelConstants {
   /** Prior strength for the category-multiple shrinkage: how many phantom protocols at the global median. */
   prior_strength: number;
@@ -68,6 +89,9 @@ export interface ModelConstants {
   maturity_range: number;
   maturity_days: number;
   unknown_age_days: number;
+  /** Size-factor clamp: how far (TVL / sector median TVL)^gamma may move a multiple. */
+  size_factor_floor: number;
+  size_factor_cap: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -81,10 +105,31 @@ export const MODEL: ModelConstants = {
   maturity_range: 0.4,
   maturity_days: 1095,
   unknown_age_days: 365,
+  size_factor_floor: 0.5,
+  size_factor_cap: 2,
 };
 
+/** The fitted terms as the dashboard's model constants: the selected candidate's four fitted
+ *  numbers over radar-3's fixed frame (multiple band, growth band, maturity horizon, unknown age). */
+export function termsToModel(terms: TermCandidate): ModelConstants {
+  return {
+    prior_strength: terms.prior,
+    multiple_floor: MODEL.multiple_floor,
+    multiple_cap: MODEL.multiple_cap,
+    growth_weight: terms.growth_weight,
+    growth_floor: MODEL.growth_floor,
+    growth_cap: MODEL.growth_cap,
+    maturity_floor: terms.maturity_floor,
+    maturity_range: terms.maturity_range,
+    maturity_days: MODEL.maturity_days,
+    unknown_age_days: MODEL.unknown_age_days,
+    size_factor_floor: terms.clamp_lo,
+    size_factor_cap: terms.clamp_hi,
+  };
+}
+
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
@@ -126,6 +171,13 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  /** Chance the protocol ever issues a token, from the peers' record (lib/odds.ts). */
+  token_odds: number;
+  token_odds_category: number;
+  token_odds_tvl: number;
+  token_odds_age: number;
+  /** Implied value weighted by the launch odds: the launch that may come, not the certain one. */
+  expected_value_usd: number;
   model: {
     category_multiple: number;
     category_comps: number;
@@ -155,6 +207,11 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  token_odds: number;
+  token_odds_category: number;
+  token_odds_tvl: number;
+  token_odds_age: number;
+  expected_value_usd: number;
   category_multiple: number;
   category_comps: number;
   size_factor: number;
@@ -195,6 +252,12 @@ export interface RadarData {
   curve: SizeCurve;
   /** The blind test: leave-one-out error of the flat median against the curve. */
   backtest: CurveBacktest;
+  /** The fitted value terms: the selected candidate and every candidate's held-out record. */
+  terms: TermSelection;
+  /** The launch odds, validated: AUC on the full snapshot and on both held-out halves. */
+  odds: OddsValidation;
+  /** The snapshot's integrity: what the input is, what is missing, what is covered. */
+  integrity: Integrity;
   /** Live comps for the dashboard's curve chart: raw TVL and market cap. */
   scatter: CurvePoint[];
   /** How many board rows carry each farm verdict. */
@@ -325,7 +388,7 @@ export function impliedValue(
   const sector = sectors.get(protocol.category ?? 'Other') ?? sectors.get('Other')!;
   // The multiple the model scores with is the rounded multiple the board carries, so the dashboard's
   // recompute from the same figures lands on the same number, to the dollar.
-  const { multiple, size_factor } = curveMultiple(protocol.tvl_usd, protocol.category, sectors, curve, model.multiple_floor, model.multiple_cap);
+  const { multiple, size_factor } = curveMultiple(protocol.tvl_usd, protocol.category, sectors, curve, model.multiple_floor, model.multiple_cap, model.size_factor_floor, model.size_factor_cap);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
@@ -372,6 +435,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   const live = liveComps(snapshot);
   const curve = fitSizeCurve(live);
   const sectors = sectorCurves(live, curve, model.prior_strength);
+  const oddsModel: OddsModel = fitOdds(snapshot.protocols, snapshot.as_of);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
@@ -390,11 +454,15 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, sectors, curve, model);
-    return { p, ...v };
+    const o = tokenOdds(p, snapshot.as_of, oddsModel);
+    const expected = Math.max(1, Math.round(v.implied * o.odds));
+    return { p, ...v, odds: o, expected };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => {
-    const econ = farmEconomics(s.p.chains, s.p.tvl_usd, s.age, s.implied);
+    // The farm verdict is sized on the EXPECTED value: a farmer sizes a position on the launch
+    // that may come, so the capacity is 5% of implied x odds at $100 of profit per farmer.
+    const econ = farmEconomics(s.p.chains, s.p.tvl_usd, s.age, s.expected);
     return {
       rank: i + 1,
       slug: s.p.slug,
@@ -410,6 +478,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       token_status: 'pre-token',
       age_days: s.age,
       implied_value_usd: s.implied,
+      token_odds: s.odds.odds,
+      token_odds_category: s.odds.category_rate,
+      token_odds_tvl: s.odds.tvl_rate,
+      token_odds_age: s.odds.age_rate,
+      expected_value_usd: s.expected,
       model: {
         category_multiple: round4(s.categoryMultiple),
         category_comps: s.categoryComps,
@@ -554,6 +627,11 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    token_odds: row.token_odds,
+    token_odds_category: row.token_odds_category,
+    token_odds_tvl: row.token_odds_tvl,
+    token_odds_age: row.token_odds_age,
+    expected_value_usd: row.expected_value_usd,
     category_multiple: row.model.category_multiple,
     category_comps: row.model.category_comps,
     size_factor: row.model.size_factor,
@@ -565,40 +643,54 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
-/** Everything the dashboard renders, from the snapshot. */
+/** Everything the dashboard renders, from the snapshot. The value terms are selected from the
+ *  snapshot's own live comps first (lib/terms.ts), so the board is scored with the fitted terms
+ *  and the dashboard states them; the odds are validated on the same snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
-  const live = liveRows(snapshot);
+  const live = liveComps(snapshot);
+  const liveDetailed = snapshot.protocols
+    .filter((p) => !isPreToken(p) && p.category !== 'CEX' && p.tvl_usd > 0 && p.mcap_usd !== null && p.mcap_usd > 0)
+    .map((p) => ({ slug: p.slug, category: p.category, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd!, change_7d: p.change_7d, listed_at: p.listed_at }));
+  const terms: TermSelection = selectTerms(liveDetailed, snapshot.as_of);
+  const effectiveModel = termsToModel(terms.model);
+  const board = buildBoard(snapshot, effectiveModel);
+  const odds: OddsValidation = validateOdds(snapshot.protocols, snapshot.as_of);
+  const fitCount = fitSizeCurve(live).comps;
+  const integrity: Integrity = integrityStrip(snapshot, live.length, fitCount, board.length, snapshot.watchlist.filter((s) => board.some((r) => r.slug === s)).length);
+  const liveRowsOut = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
-  const { globalMedian, byCategory } = categoryMultiples(snapshot, model);
+  const { globalMedian, byCategory } = categoryMultiples(snapshot, effectiveModel);
   const catsOnBoard = new Set(board.map((r) => r.category ?? 'Other'));
   const category_multiples = [...byCategory.values()]
     .filter((c) => catsOnBoard.has(c.category))
     .sort((a, b) => b.multiple - a.multiple || (a.category < b.category ? -1 : 1));
   const comps = liveComps(snapshot);
   const curve = fitSizeCurve(comps);
-  const backtest = looBacktest(comps, model.prior_strength);
+  const backtest = looBacktest(comps, effectiveModel.prior_strength);
   const scatter = scatterSample(comps, 60);
   const verdicts = verdictCounts(board.map((r) => r.farm_verdict));
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
-    model,
+    model: effectiveModel,
     model_version: MODEL_VERSION,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
-    live_size: live.length,
+    live_size: liveRowsOut.length,
     global_median: round4(globalMedian),
     category_multiples,
     curve,
     backtest,
+    terms,
+    odds,
+    integrity,
     scatter,
     verdicts,
     watchlist: [...snapshot.watchlist],
     rows: board.map(radarRow),
-    live,
+    live: liveRowsOut,
   };
   return { board, radar };
 }

@@ -1,4 +1,4 @@
-// A farm plan's economics (radar-3): what farming one protocol actually
+// A farm plan's economics (radar-4): what farming one protocol actually
 // costs, and whether the launch is big enough to pay for it. radar-2's plan
 // listed a capital and a gas figure per step, but never added them up and
 // never said whether the row was worth farming at all. A farmer deciding
@@ -9,11 +9,13 @@
 // sits on, because a transaction on Ethereum costs an order of magnitude
 // more than the same action on a rollup, and on the hold: every week of
 // qualifying activity is another transaction. The verdict weighs the cost
-// against the launch's size: a launch is assumed to send 5% of its implied
-// value to its farmers, and a farmer is assumed to need $100 of profit for
-// the position to be worth the trouble, so the capacity is how many farmers
-// the launch supports at that profit. Both assumptions are stated on the
-// dashboard, and the verdict is a rule on the two numbers, not a feeling:
+// against the launch's size: a launch is assumed to send 5% of its EXPECTED
+// value to its farmers (implied value weighted by the launch odds, so a
+// launch that may never come does not count as if it were certain), and a
+// farmer is assumed to need $100 of profit for the position to be worth the
+// trouble, so the capacity is how many farmers the launch supports at that
+// profit. Both assumptions are stated on the dashboard, and the verdict is
+// a rule on the two numbers, not a feeling:
 //
 //   Strong    capacity >= 5,000 farmers and total gas <= $15
 //   Worth it  capacity >= 500 farmers and total gas <= $40
@@ -72,15 +74,16 @@ export function capitalFor(tvlUsd: number): number {
 }
 
 /**
- * One row's farm economics. `impliedValueUsd` is the launch's implied value
- * from the model; the capacity follows from it and the two stated
- * assumptions, and the verdict is a rule on capacity and total gas.
+ * One row's farm economics. `expectedValueUsd` is the launch's expected value
+ * from the model (implied value weighted by the launch odds); the capacity
+ * follows from it and the two stated assumptions, and the verdict is a rule
+ * on capacity and total gas.
  */
 export function farmEconomics(
   chains: string[],
   tvlUsd: number,
   ageDays: number | null,
-  impliedValueUsd: number,
+  expectedValueUsd: number,
 ): FarmEconomics {
   const hold = holdDaysFor(ageDays);
   const gas = gasPerAction(chains);
@@ -88,7 +91,7 @@ export function farmEconomics(
   // Setup, one qualifying action a week, and the exit: 2 + weeks transactions.
   const cost = Math.max(1, Math.round(gas * (2 + weeks)));
   const capital = capitalFor(tvlUsd);
-  const capacity = Math.max(0, Math.floor((FARMER_SHARE * impliedValueUsd) / PROFIT_PER_FARMER_USD));
+  const capacity = Math.max(0, Math.floor((FARMER_SHARE * expectedValueUsd) / PROFIT_PER_FARMER_USD));
   let verdict: FarmEconomics['verdict'];
   if (capacity >= 5000 && cost <= 15) verdict = 'Strong';
   else if (capacity >= 500 && cost <= 40) verdict = 'Worth it';

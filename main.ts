@@ -1,7 +1,7 @@
 // Token Radar (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the radar-2 model in lib/model.ts, writes the ranked board to
+// pre-token protocol with the radar-4 model in lib/model.ts, writes the ranked board to
 // /output/board.json, writes the dashboard's dataset to /output/data.js, copies this repository's
 // dashboard/ and screenshots/ to /output, and writes /output/dossier.json, the summary the judge
 // reads, with the vendored make.fun library.
@@ -97,8 +97,11 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: DASHBOARD_CAPS }));
 
 const top = radar.category_multiples[0];
+const selected = radar.terms.candidates.find((c) => c.selected);
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: ${radar.model_version}, global median ${radar.global_median}x, top sector ${top ? `${top.category} ${top.multiple}x` : 'n/a'}\n` +
+    `token radar: terms selected ${selected ? selected.candidate.name : 'n/a'} (pooled held-out median ${selected ? selected.pooled_heldout_median_x : 'n/a'}x, LOO median ${selected ? selected.loo_median_x : 'n/a'}x)\n` +
+    `token radar: launch odds AUC ${radar.odds.auc_full} (held out ${radar.odds.auc_split_a} / ${radar.odds.auc_split_b}); integrity ${radar.integrity.protocols} protocols, ${radar.integrity.watchlist_covered}/${radar.integrity.watchlist} watchlist, ${radar.integrity.missing_listed_at} missing listed date, ${radar.integrity.fit_excluded} live comps outside the sanity band\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length} files, ${sourceBytes} bytes), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );

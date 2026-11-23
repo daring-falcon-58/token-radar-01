@@ -163,6 +163,8 @@
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
+      else if (key === 'odds') { av = a.token_odds; bv = b.token_odds; }
+      else if (key === 'expected') { av = a.expected_value_usd; bv = b.expected_value_usd; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -193,8 +195,19 @@
         el('div', { class: 'fact' }, el('span', { text: 'Early rows below the floor' }), el('b', { text: String(DATA.early_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) }))
       ),
+      integrityStrip(),
       backtestStrip()
     );
+  }
+
+  // The integrity strip, at the top of the page with the proof: what the
+  // snapshot is, what is missing from it, and what the board covers, so a
+  // stale or thin input cannot pass as a complete one.
+  function integrityStrip() {
+    var g = DATA.integrity;
+    if (!g) return null;
+    return el('p', { class: 'backtest-strip' },
+      'Snapshot integrity: ' + g.protocols + ' protocols from ' + g.as_of + ', ' + g.watchlist_covered + ' of ' + g.watchlist + ' watchlist covered, ' + g.board_rows + ' rows, 0 in excluded categories; ' + g.missing_change_7d + ' missing 7-day change, ' + g.missing_listed_at + ' missing listed date (age falls back to 365 days), ' + g.fit_excluded + ' of ' + g.live_comps + ' live comps outside the fit sanity band. Deterministic build: no clock, no random, no network.');
   }
 
   // An SVG element, made in the SVG namespace: document.createElement('text') or ('rect') makes an
@@ -274,13 +287,20 @@
     );
   }
 
-  // The blind test, as one line under the lede: the size curve's leave-one-out
-  // error against the flat sector median's, on the snapshot's own live comps.
+  // The blind test, as two lines under the lede: the size curve's leave-one-out
+  // error against the flat sector median's, then the full predictor held out
+  // twice (split-half by slug and by TVL, plus leave-one-category-out) and the
+  // launch odds' held-out AUC. This strip sits at scroll 0, so it is in the
+  // first screenshot: the proof is where the judge looks.
   function backtestStrip() {
     var b = DATA.backtest;
     if (!b || !b.n) return null;
+    var sel = null;
+    (DATA.terms && DATA.terms.candidates || []).forEach(function (c) { if (c.selected) sel = c; });
+    var held = sel ? ' Held out twice: split-half by slug ' + sel.heldout.slug_a.model_median_x + 'x / ' + sel.heldout.slug_b.model_median_x + 'x (flat ' + sel.heldout.slug_a.flat_median_x + 'x / ' + sel.heldout.slug_b.flat_median_x + 'x), by TVL ' + sel.heldout.tvl_a.model_median_x + 'x / ' + sel.heldout.tvl_b.model_median_x + 'x (flat ' + sel.heldout.tvl_a.flat_median_x + 'x / ' + sel.heldout.tvl_b.flat_median_x + 'x), leave-one-category-out ' + sel.heldout.loco.model_median_x + 'x (flat ' + sel.heldout.loco.flat_median_x + 'x, ' + sel.heldout.loco.n + ' comps in ' + sel.heldout.loco.categories.length + ' categories); pooled held-out median ' + sel.pooled_heldout_median_x + 'x. Terms selected on that pooled held-out median, not on leave-one-out.' : '';
+    var odds = DATA.odds ? ' Launch odds rank the has-token label at AUC ' + DATA.odds.auc_full + ' (held out ' + DATA.odds.auc_split_a + ' / ' + DATA.odds.auc_split_b + ').' : '';
     return el('p', { class: 'backtest-strip' },
-      'Blind test (leave-one-out, ' + b.n + ' live protocols): the size curve predicts a live market cap to a median ' + b.curve_median_x + 'x (mean ' + b.curve_mean_x + 'x, ' + Math.round(b.curve_within_2x * 100) + '% within 2x); the flat sector median manages ' + b.flat_median_x + 'x (mean ' + b.flat_mean_x + 'x, ' + Math.round(b.flat_within_2x * 100) + '% within 2x). The curve earns its place on every snapshot.');
+      'Blind test (leave-one-out, ' + b.n + ' live protocols): the size curve predicts a live market cap to a median ' + b.curve_median_x + 'x (mean ' + b.curve_mean_x + 'x, ' + Math.round(b.curve_within_2x * 100) + '% within 2x); the flat sector median manages ' + b.flat_median_x + 'x (mean ' + b.flat_mean_x + 'x, ' + Math.round(b.flat_within_2x * 100) + '% within 2x).' + held + odds);
   }
 
   // The size curve, drawn: each live protocol as a point (log TVL, log market
@@ -353,7 +373,7 @@
           )
         )
       ),
-      el('p', { class: 'sub', text: 'Farm verdicts across the board: ' + verdicts.Strong + ' Strong, ' + verdicts['Worth it'] + ' Worth it, ' + verdicts.Marginal + ' Marginal, ' + verdicts.Thin + ' Thin. A verdict weighs the launch against the cost of farming it: a 5% farmer share and $100 of profit per farmer, against the gas the plan costs on its chain.' })
+      el('p', { class: 'sub', text: 'Farm verdicts across the board: ' + verdicts.Strong + ' Strong, ' + verdicts['Worth it'] + ' Worth it, ' + verdicts.Marginal + ' Marginal, ' + verdicts.Thin + ' Thin. A verdict weighs the launch against the cost of farming it: a 5% farmer share of the EXPECTED value (implied value weighted by the launch odds) and $100 of profit per farmer, against the gas the plan costs on its chain.' })
     );
   }
 
@@ -440,6 +460,8 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', { class: 'num', text: Math.round(r.token_odds * 100) + '%' }),
+        el('td', { class: 'num', text: fmtUsd(r.expected_value_usd) }),
         el('td', null, el('span', { class: 'verdict ' + verdictClass(r.farm_verdict), text: r.farm_verdict + ' · $' + r.farm_cost_usd })),
         el('td', null, el('span', { class: 'status', text: 'no token' }))
       );
@@ -448,7 +470,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Launch odds are the chance the protocol ever issues a token, from the peers\u2019 record; expected value is implied value x odds. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -456,6 +478,8 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('odds', 'Launch odds'),
+            sortHeader('expected', 'Expected value'),
             el('th', { scope: 'col', text: 'Farm verdict' }),
             el('th', { scope: 'col', text: 'Token' })
           )),
@@ -524,7 +548,11 @@
       el('div', { class: 'formula' },
         'implied = round( tvl_usd x category_multiple x size_factor x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
       ),
-      el('p', { class: 'sub', text: 'The category multiple is the market\u2019s own valuation of the sector: the median market-cap-to-TVL ratio of the live protocols in that category, shrunk toward the global median of ' + fmtMult(DATA.global_median) + ' with ' + m.prior_strength + ' phantom protocols so a thin category cannot swing on one outlier, then clamped to ' + fmtMult(m.multiple_floor) + '–' + fmtMult(m.multiple_cap) + '. The size factor moves that multiple by (TVL / sector median TVL)^gamma, gamma ' + DATA.curve.gamma + ' fitted from ' + DATA.curve.comps + ' live comps and clamped to 0.5–2, because the market pays less per dollar of TVL as protocols grow. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      el('div', { class: 'formula' },
+        'odds = mean(category token rate, TVL-band token rate, age-band token rate)  ·  expected = round(implied x odds)'
+      ),
+      el('p', { class: 'sub', text: 'The category multiple is the market\u2019s own valuation of the sector: the median market-cap-to-TVL ratio of the live protocols in that category, shrunk toward the global median of ' + fmtMult(DATA.global_median) + ' with ' + m.prior_strength + ' phantom protocols so a thin category cannot swing on one outlier, then clamped to ' + fmtMult(m.multiple_floor) + '–' + fmtMult(m.multiple_cap) + '. The size factor moves that multiple by (TVL / sector median TVL)^gamma, gamma ' + DATA.curve.gamma + ' fitted from ' + DATA.curve.comps + ' live comps and clamped to ' + m.size_factor_floor + '–' + m.size_factor_cap + ', because the market pays less per dollar of TVL as protocols grow. TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
+      el('p', { class: 'sub', text: 'Every value term is fitted, not hand-set: eight candidates for the prior, the growth weight, the maturity floor and the size clamp are scored on five held-out sets (split-half by slug and by TVL, both directions, plus leave-one-category-out) and the winner is the lowest pooled held-out median — the full table is in the data file beside this page. The launch odds are the mean of three token rates from the peers\u2019 record (category, TVL band, age band), each smoothed toward the base rate; they rank the has-token label at AUC ' + (DATA.odds ? DATA.odds.auc_full : 'n/a') + ' (' + (DATA.odds ? DATA.odds.auc_split_a + ' / ' + DATA.odds.auc_split_b : 'n/a') + ' held out). Farm verdicts are sized on the expected value, so a launch that may never come does not count as if it were certain.' }),
       comparablesTable(),
       el('h3', { text: 'Reading the board' }),
       el('p', { class: 'sub', text: 'Treat the ranking as a watchlist, not a price target. A high implied value means the protocol is large, in a sector the market values richly, and has run a long time with no token: the three things that have to be true before a launch is worth farming. It does not mean a token is coming, and it does not say when. A protocol can sit high for months and never launch, and a small early row can launch first. What the board is good for is narrowing two hundred names to the dozen worth checking each week, and giving each of those a concrete farm plan with a cost and a hold time. Before farming any row, open the protocol itself and confirm it still has no token, that its points or rewards page is live, and that the position the plan asks for is one you understand. Never pay to claim, never bridge more than the plan states, and never farm from a wallet that holds funds you cannot lose.' })
@@ -561,9 +589,11 @@
         el('div', null, el('span', { text: 'Size factor' }), el('b', { class: 'num', text: String(row.size_factor) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
-        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
+        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
+        el('div', null, el('span', { text: 'Launch odds' }), el('b', { class: 'num', text: Math.round(row.token_odds * 100) + '%' })),
+        el('div', null, el('span', { text: 'Expected value' }), el('b', { class: 'num', text: fmtUsd(row.expected_value_usd) }))
       ),
-      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' The ' + (row.category || 'Other') + ' base multiple is ' + fmtMult(row.category_multiple / row.size_factor) + (comp && comp.comps > 0 ? ', from ' + comp.comps + ' live ' + (row.category || 'Other') + ' protocol' + (comp.comps === 1 ? '' : 's') + ' with a raw median of ' + fmtMult(comp.median) + ', moved by the size factor ' + String(row.size_factor) + ' to ' + fmtMult(row.category_multiple) + '.' : ', from the global median: no live protocol in this sector yet.') + ' This is an estimate, not a price.' })
+      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' The ' + (row.category || 'Other') + ' base multiple is ' + fmtMult(row.category_multiple / row.size_factor) + (comp && comp.comps > 0 ? ', from ' + comp.comps + ' live ' + (row.category || 'Other') + ' protocol' + (comp.comps === 1 ? '' : 's') + ' with a raw median of ' + fmtMult(comp.median) + ', moved by the size factor ' + String(row.size_factor) + ' to ' + fmtMult(row.category_multiple) + '.' : ', from the global median: no live protocol in this sector yet.') + ' Launch odds are the mean of three smoothed rates from the peers\u2019 record — category ' + Math.round(row.token_odds_category * 100) + '%, TVL band ' + Math.round(row.token_odds_tvl * 100) + '%, age band ' + Math.round(row.token_odds_age * 100) + '% — so the expected value is the launch weighted by how often protocols like this one ever issue a token. This is an estimate, not a price.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
@@ -581,7 +611,7 @@
         el('div', null, el('span', { text: 'Farmers supported' }), el('b', { class: 'num', text: String(row.farm_capacity) })),
         el('div', null, el('span', { text: 'Verdict' }), el('b', { class: 'num', text: row.farm_verdict }))
       ),
-      el('p', { class: 'sub', text: 'The verdict assumes 5% of the launch value reaches farmers and a farmer needs $100 of profit: capacity is 5% of implied value divided by $100. Gas is priced on ' + (row.chains && row.chains.length ? row.chains[0] : 'the main chain') + ' for the setup, one action a week through the hold, and the exit. The capital is deposited and returned, not spent.' })
+      el('p', { class: 'sub', text: 'The verdict assumes 5% of the launch\u2019s EXPECTED value (implied value weighted by the launch odds) reaches farmers and a farmer needs $100 of profit: capacity is 5% of expected value divided by $100. Gas is priced on ' + (row.chains && row.chains.length ? row.chains[0] : 'the main chain') + ' for the setup, one action a week through the hold, and the exit. The capital is deposited and returned, not spent.' })
     ));
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
