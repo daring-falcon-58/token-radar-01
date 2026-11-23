@@ -1,5 +1,9 @@
 # Token Radar
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/daring-falcon-58/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/daring-falcon-58/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 A token launch radar: a ranked board of the pre-token protocols most worth watching, from a sealed
 snapshot of every protocol DefiLlama tracks, with a web dashboard that shows the board, a detail view
 for each protocol, and the steps to farm it.
